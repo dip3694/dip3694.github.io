@@ -13,25 +13,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Install Bubblewrap
         run: npm install -g @bubblewrap/cli
+
+      - name: Prepare Android SDK and Bubblewrap (no prompts)
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKM" ]; then SDKM="$(command -v sdkmanager)"; fi
+          yes | "$SDKM" --licenses | tail -n 2
+          yes | "$SDKM" "build-tools;34.0.0" "build-tools;35.0.0" "platforms;android-34" "platforms;android-35" | tail -n 2
+          jq -n --arg jdk "$JAVA_HOME" --arg sdk "$ANDROID_HOME" \
+            '{jdkPath: $jdk, androidSdkPath: $sdk, androidSdkBuildToolsVersion: "34.0.0"}' \
+            | tee "$HOME/.bubblewrap/config.json"
 
       - name: Read site icon from manifest
         env:
           SITE: ${{ github.event.inputs.site_address }}
         run: |
           ICON=$(curl -fsSL "https://$SITE/manifest.json" | jq -r '
-            [.icons[]
+            [(.icons // [])[]
               | {src: .src,
                  px: ((.sizes // "0x0") | split("x")[0] | (tonumber? // 0))}]
             | max_by(.px).src')
@@ -104,6 +114,7 @@ jobs:
           BUBBLEWRAP_KEY_PASSWORD: moneytracker
         run: |
           cd twa
+          bubblewrap doctor
           bubblewrap build --skipPwaValidation
           ls -la
 
