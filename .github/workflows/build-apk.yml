@@ -27,7 +27,7 @@ jobs:
 
       - name: Create the Android project
         env:
-          HOST: ${{ inputs.host }}
+          HOST: ${{ inputXs.host }}
         run: |
           set -e
           PKG=app.moneytracker.twa
