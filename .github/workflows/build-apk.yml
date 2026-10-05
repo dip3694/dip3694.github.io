@@ -1,0 +1,68 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      site_address:
+        description: "Website address (without https://)"
+        required: true
+        default: "dip3694.github.io"
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Bubblewrap
+        run: npm install -g @bubblewrap/cli
+
+      - name: Read site icon from manifest
+        env:
+          SITE: ${{ github.event.inputs.site_address }}
+        run: |
+          ICON=$(curl -fsSL "https://$SITE/manifest.json" \
+            | python3 -c "
+          import sys, json
+          m = json.load(sys.stdin)
+          best, size = None, -1
+          for i in m.get('icons', []):
+              try:
+                  s = int((i.get('sizes') or '0x0').split('x')[0])
+              except Exception:
+                  s = 0
+              if s &gt; size:
+                  size, best = s, i.get('src')
+          print(best or '')
+          ")
+          if [ -z "$ICON" ]; then
+            echo "::error::No icon found in https://$SITE/manifest.json"
+            exit 1
+          fi
+          case "$ICON" in
+            /*) ICON="https://$SITE$ICON" ;;
+            http*) ;;
+            *) ICON="https://$SITE/$ICON" ;;
+          esac
+          echo "ICON=$ICON" &gt;&gt; "$GITHUB_ENV"
+
+      - name: Create signing key and TWA manifest
+        env:
+          SITE: ${{ github.event.inputs.site_address }}
+        run: |
+          mkdir twa
+          cd twa
+          keytool -genkeypair -v -keystore android.keystore \
+            -alias android -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass moneytracker -keypass moneytracker \
+            -dname "CN=Money Tracker, OU=Apps, O=Dip, C=IN"
+          cat &gt; twa-manifest.json &lt;
