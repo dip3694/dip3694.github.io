@@ -1,1 +1,14 @@
-[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"app.moneytracker.twa","sha256_cert_fingerprints":["E2:97:CE:3C:AF:C7:21:FE:D5:5E:20:97:06:E2:81:53:8A:C3:95:81:42:16:DB:DA:54:05:8B:28:5A:45:7B:A1"]}}]
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "app.moneytracker.twa",
+      "sha256_cert_fingerprints": [
+        "E2:97:CE:3C:AF:C7:21:FE:D5:5E:20:97:06:E2:81:53:8A:C3:95:81:42:16:DB:DA:54:05:8B:28:5A:45:7B:A1"
+      ]
+    }
+  }
+]
