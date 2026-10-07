@@ -7,54 +7,83 @@ const HDFC_ACCOUNT='HDFC', HDFC_LIMIT=8000;   // optional deposit-limit warning,
 const AUTO_NOTE='Auto-pay (auto-processed)';
 const SH='https://sheets.googleapis.com/v4/spreadsheets';
 const SID_OF={'MONEY TRACKER':1,'ENTRIES':2,'BUDGETS':3,'OPENING BALANCE':4,'AUTOPAY':5};
-let tok=null,tokExp=0,tokenClient=null,pendingAuth=[],SID=localStorage.getItem('mt_sheet_id')||'';
-let DATA=null,DATA_T=0,dirty=true,q=Promise.resolve();
+let tok=null,tokExp=0,SID=localStorage.getItem('mt_sheet_id')||'';
+let DATA=null,DATA_T=0,dirty=true,q=Promise.resolve(),authBusy=false;
+try{ const sv=JSON.parse(localStorage.getItem('mt_tok')||'null'); if(sv&&sv.exp>Date.now()+60000){ tok=sv.t; tokExp=sv.exp; } }catch(e){}
 
-// ---------- sign-in ----------
-function showSignIn(m){ document.getElementById('setupMsg').innerText=m||''; document.getElementById('setup').style.display='block'; }
+// ---------- sign-in: sign in ONCE, stay signed in (refresh token kept via the broker) ----------
+const REDIRECT=location.origin+'/';          // must be listed as an Authorized redirect URI in Google Cloud
+let refreshing=null;
+function setTok(t,sec){
+  tok=t; tokExp=Date.now()+(sec||3600)*1000;
+  try{ localStorage.setItem('mt_tok',JSON.stringify({t:tok,exp:tokExp})); }catch(e){}
+}
+function showSignIn(m){
+  const g=id=>document.getElementById(id);
+  g('suTitle').innerText='Money Tracker';
+  g('suText').innerText='Sign in with your Google account. The app creates a spreadsheet called MONEY TRACKER DATA in your own Google Drive and keeps all your entries there. You only do this once.';
+  g('suBtn').innerText='Sign in with Google';
+  g('setupMsg').innerText=m||'';
+  g('setup').style.display='block';
+}
 function hideSignIn(){ document.getElementById('setup').style.display='none'; }
-function initAuth(){
-  if(tokenClient) return true;
-  if(!(window.google&&google.accounts&&google.accounts.oauth2)) return false;
-  tokenClient=google.accounts.oauth2.initTokenClient({client_id:CLIENT_ID,scope:SCOPE,callback:()=>{}});
-  return true;
+async function broker(body){
+  const r=await fetch(BROKER_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)});
+  const d=await r.json();
+  if(!d.ok) throw new Error(d.error||'broker error');
+  return d;
 }
-function requestToken(prompt){
-  if(!initAuth()){ showSignIn('Google sign-in could not load. Check your internet and try again.'); return; }
-  tokenClient.callback=r=>{
-    if(r.error){ showSignIn('Sign-in failed. Tap the button to try again.'); return; }
-    tok=r.access_token; tokExp=Date.now()+(r.expires_in||3600)*1000;
-    localStorage.setItem('mt_signed','1'); hideSignIn();
-    const f=pendingAuth; pendingAuth=[]; f.forEach(x=>x(tok));
-  };
-  tokenClient.error_callback=()=>showSignIn('Tap the button to continue.');
-  tokenClient.requestAccessToken({prompt:prompt});
+function signIn(){
+  if(/PASTE-/.test(CLIENT_ID)||/PASTE-/.test(BROKER_URL)){ showSignIn('App not set up: add CLIENT_ID and BROKER_URL in config.js'); return; }
+  if(authBusy) return; authBusy=true; setTimeout(()=>{ authBusy=false; },3000);
+  const st=Math.random().toString(36).slice(2)+Date.now().toString(36);
+  localStorage.setItem('mt_state',st);
+  location.href='https://accounts.google.com/o/oauth2/v2/auth?'+new URLSearchParams({client_id:CLIENT_ID,redirect_uri:REDIRECT,response_type:'code',scope:SCOPE,access_type:'offline',prompt:'consent',state:st}).toString();
 }
-function signIn(){ requestToken(localStorage.getItem('mt_signed')?'':'consent'); }
-function getToken(){
-  if(tok&&Date.now()<tokExp-60000) return Promise.resolve(tok);
-  return new Promise((res,rej)=>{
-    if(!navigator.onLine){ rej(new Error('offline')); return; }
-    pendingAuth.push(res);
-    if(pendingAuth.length===1){
-      if(/PASTE-YOUR/.test(CLIENT_ID)){ showSignIn('App not set up: add your Google Client ID in config.js'); return; }
-      const was=localStorage.getItem('mt_signed');
-      showSignIn(was?'Tap to continue.':'');
-      if(was) requestToken('');
+async function handleRedirect(){
+  const p=new URLSearchParams(location.search);
+  if(!p.has('code')&&!p.has('error')) return;
+  const code=p.get('code'), st=p.get('state'), err=p.get('error');
+  try{ history.replaceState(null,'',REDIRECT); }catch(e){}
+  const want=localStorage.getItem('mt_state'); localStorage.removeItem('mt_state');
+  if(err||!code){ showSignIn('Sign-in was cancelled. Tap the button to try again.'); return; }
+  if(!want||st!==want){ showSignIn('Sign-in could not be verified. Tap the button to try again.'); return; }
+  try{
+    const d=await broker({action:'exchange',code:code,redirect_uri:REDIRECT});
+    if(!d.refresh_token) throw new Error('no refresh token');
+    localStorage.setItem('mt_rt',d.refresh_token); localStorage.setItem('mt_signed','1');
+    setTok(d.access_token,d.expires_in); hideSignIn();
+  }catch(e){ showSignIn('Sign-in failed ('+e.message+'). Tap the button to try again.'); }
+}
+const authReady=handleRedirect();
+async function getToken(){
+  await authReady;
+  if(tok&&Date.now()<tokExp-60000) return tok;
+  const rt=localStorage.getItem('mt_rt');
+  if(rt){
+    if(!refreshing) refreshing=broker({action:'refresh',refresh_token:rt}).then(d=>{ setTok(d.access_token,d.expires_in); return tok; }).finally(()=>{ refreshing=null; });
+    try{ return await refreshing; }
+    catch(e){
+      if(e.message!=='invalid_grant') throw e;      // network problem: just fail, keep the sign-in
+      localStorage.removeItem('mt_rt'); localStorage.removeItem('mt_tok'); tok=null;   // access was revoked
     }
-  });
+  }
+  if(!navigator.onLine) throw new Error('offline');
+  if(document.getElementById('setup').style.display!=='block') showSignIn('');
+  return new Promise(()=>{});                       // wait for the user to sign in (page reloads after sign-in)
 }
 function signOut(){
   if(!confirm('Sign out of Google on this device? Entries still waiting to sync will be discarded.')) return;
-  try{ if(tok&&window.google) google.accounts.oauth2.revoke(tok,()=>{}); }catch(e){}
-  ['mt_signed','mt_sheet_id','mt_pending_entries'].forEach(k=>localStorage.removeItem(k));
+  const rt=localStorage.getItem('mt_rt');
+  try{ if(rt) fetch('https://oauth2.googleapis.com/revoke?token='+encodeURIComponent(rt),{method:'POST'}); }catch(e){}
+  ['mt_signed','mt_sheet_id','mt_pending_entries','mt_tok','mt_rt','mt_state'].forEach(k=>localStorage.removeItem(k));
   location.reload();
 }
 async function gfetch(url,opt,n){
   const t=await getToken();
   opt=opt||{}; opt.headers=Object.assign({Authorization:'Bearer '+t},opt.headers||{});
   const r=await fetch(url,opt);
-  if(r.status===401&&!(n>0)){ tok=null; return gfetch(url,opt,1); }
+  if(r.status===401&&!(n>0)){ tok=null; localStorage.removeItem('mt_tok'); return gfetch(url,opt,1); }
   if(!r.ok) throw new Error('Google '+r.status+': '+(await r.text()).slice(0,200));
   return r.json();
 }
